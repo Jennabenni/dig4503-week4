@@ -1,0 +1,78 @@
+{
+  "title": "MCP Server Walkthrough",
+  "description": "A guided tour of the dev-notes MCP server — how it starts, registers tools, writes files, and communicates with Claude Code.",
+  "steps": [
+    {
+      "title": "What is an MCP server, and why does this file exist?",
+      "description": "**MCP** stands for **Model Context Protocol** — a standard that lets Claude talk to external programs. Without MCP, Claude can only use its built-in knowledge and the tools Anthropic hardcoded into it. With MCP, *you* can write a program that gives Claude new abilities.\n\nThis file (`index.js`) *is* that program. When you configure Claude Code to use it, Claude Code will launch `node index.js` as a background process. Then, whenever you ask Claude to save or read a dev note, Claude will send a message to this process and wait for the response — all behind the scenes.\n\nThink of it like a restaurant: Claude is the waiter who takes your order, but this server is the kitchen that actually does the cooking. The MCP protocol is the ticket system the waiter uses to talk to the kitchen.",
+      "file": "index.js",
+      "line": 1
+    },
+    {
+      "title": "Imports: the two things every MCP server needs",
+      "description": "Every MCP server needs exactly two classes from the SDK:\n\n- **`McpServer`** — this is the main object you'll work with. It handles all the low-level MCP protocol details (message formatting, error handling, handshaking with Claude) so you don't have to. You just register tools on it and it takes care of the rest.\n- **`StdioServerTransport`** — this is the \"wire\" connecting your server to Claude Code. The word *stdio* means standard input/output: Claude Code writes messages to this process's `stdin` (standard input) and reads replies from its `stdout` (standard output). It's the same mechanism as piping commands together in a terminal.\n\n`zod` is a JavaScript library for defining and validating data shapes. We use it to describe what parameters each tool expects — more on that later.\n\nThe Node.js built-ins (`fs`, `path`, `os`) handle file system operations: `fs` reads and writes files, `path` builds file paths safely across operating systems, and `os` finds the current user's home directory.",
+      "file": "index.js",
+      "line": 4
+    },
+    {
+      "title": "NOTES_DIR: deciding where files will live",
+      "description": "Before we can save any notes, we need to decide *where* on the filesystem they'll live.\n\n`os.homedir()` returns the current user's home directory — on a Mac that's something like `/Users/yourname`, on Linux `/home/yourname`. `path.join` then appends `dev-notes` to it.\n\nThe result is a full, absolute path like `/Users/yourname/dev-notes`. Using an absolute path (one that starts from the root of the filesystem) is important: it means this server works correctly no matter what directory Node.js was launched from. If we used a relative path like `./dev-notes`, it would create the folder wherever the terminal happened to be, which could be anywhere.\n\nThis constant is just a string — we're not creating the folder yet, just deciding where it will be.",
+      "file": "index.js",
+      "line": 13
+    },
+    {
+      "title": "slugify(): turning titles into safe filenames",
+      "description": "When Claude calls the `save_note` tool, it will pass a human-readable title like `\"Project Ideas!\"`. We can't use that directly as a filename — spaces and special characters cause problems across different operating systems and shells.\n\n`slugify` converts a title into a \"slug\": a lowercase, dash-separated string that's safe to use as a filename.\n\nHere's how it works step by step:\n1. `.toLowerCase()` — makes everything lowercase, avoiding case-sensitivity issues (Linux filesystems treat `Notes.md` and `notes.md` as different files)\n2. `.trim()` — removes any accidental whitespace at the start or end\n3. `.replace(/[^a-z0-9]+/g, \"-\")` — this is a regular expression that replaces any character that *isn't* a letter or digit with a dash. The `+` means consecutive special characters become a single dash.\n4. `.replace(/^-|-$/g, \"\")` — strips any dashes left at the very start or end\n\nResult: `\"Project Ideas!\"` → `\"project-ideas\"`\n\nThis function is defined once and reused by all three tools, so slugification is always consistent.",
+      "file": "index.js",
+      "line": 17
+    },
+    {
+      "title": "ensureNotesDir(): create the folder on first use",
+      "description": "If a user has never run this server before, the `~/dev-notes/` folder won't exist yet. Trying to write a file into a folder that doesn't exist would crash with an error.\n\n`ensureNotesDir` solves this by checking for the folder first and creating it if it's missing:\n\n- `fs.existsSync(NOTES_DIR)` — checks synchronously (i.e., waits for the answer before continuing) whether the path exists\n- `fs.mkdirSync(NOTES_DIR, { recursive: true })` — creates the directory if it doesn't exist\n\nThe `{ recursive: true }` option does two things: it won't throw an error if the directory already exists (normally `mkdirSync` would), and it will create any missing *parent* directories too (e.g., if `~/dev-notes/archive/` was needed and `archive/` didn't exist yet).\n\nThis function is called at the top of every tool handler — a defensive pattern that means \"make sure we're ready before we try to do anything with files.\"",
+      "file": "index.js",
+      "line": 26
+    },
+    {
+      "title": "Server initialization: creating the McpServer instance",
+      "description": "`new McpServer(...)` creates the server object and gives it an identity.\n\nThe `name` (`\"dev-notes-server\"`) and `version` (`\"1.0.0\"`) are metadata that Claude Code displays when listing available MCP servers — they're like a name tag for your server.\n\nAt this point, the server exists as a JavaScript object in memory. It knows its own name, but it has no tools registered yet and isn't connected to anything. It's like a new restaurant that's been incorporated as a business but hasn't hired any chefs or opened its doors yet.\n\nThe next section registers tools (the \"menu\"), and the very last two lines connect to Claude Code (\"open for business\").",
+      "file": "index.js",
+      "line": 33
+    },
+    {
+      "title": "Tool registration: the server.tool() pattern",
+      "description": "This is the most important pattern in the file. Every tool you want Claude to be able to call gets registered with `server.tool()`, which takes four arguments:\n\n```js\nserver.tool(name, description, schema, handler)\n```\n\n- **`name`** — a string identifier, like `\"save_note\"`. This is the exact name Claude uses when it decides to call this tool. Claude doesn't guess — it looks up the name in a list the server sends during the initial handshake.\n- **`description`** — a plain-English string Claude reads to understand *when* to use this tool. Claude uses this description to match your request to the right tool. Write it like documentation for Claude, not for humans.\n- **`schema`** — a `zod` object describing what parameters the tool expects. The SDK converts this into a JSON Schema and sends it to Claude so Claude knows exactly what fields to supply when calling the tool.\n- **`handler`** — an `async` function that runs when Claude calls the tool. It receives the validated parameters and must return a response object in a specific MCP format.\n\nThis four-argument pattern is the entire public API you need to write an MCP tool.",
+      "file": "index.js",
+      "line": 40
+    },
+    {
+      "title": "save_note: the zod parameter schema",
+      "description": "The third argument to `server.tool()` is the schema — a description of what parameters Claude must supply when calling this tool.\n\n```js\n{\n  title:   z.string().describe(\"Title of the note (used as the filename)\"),\n  content: z.string().describe(\"Markdown content to save\"),\n}\n```\n\nHere's what's happening:\n- `z.string()` tells the SDK (and Claude) that this parameter must be a string\n- `.describe(\"...\")` adds a human-readable hint that Claude reads when deciding what value to pass\n\nUnder the hood, the MCP SDK converts this zod schema into a **JSON Schema** — a standard format for describing data shapes — and sends it to Claude during the initial connection handshake. From that point on, when Claude decides to call `save_note`, it knows it must include both a `title` string and a `content` string.\n\nThink of the schema as a contract between Claude and your tool: Claude promises to always send these fields, and your handler can rely on them being there.",
+      "file": "index.js",
+      "line": 44
+    },
+    {
+      "title": "save_note: the handler — writing the file to disk",
+      "description": "The fourth argument to `server.tool()` is the async handler function. This is where the actual work happens.\n\n```js\nasync ({ title, content }) => { ... }\n```\n\nThe parameters are destructured directly from the argument — `title` and `content` arrive as validated strings because the schema already checked them.\n\nThree lines do the real work:\n1. `ensureNotesDir()` — make sure the folder exists\n2. `slugify(title) + \".md\"` — build a safe filename from the title\n3. `fs.writeFileSync(filepath, content, \"utf8\")` — write the content to disk as a UTF-8 text file\n\nThe return value is a **MCP response object** — a specific format the protocol requires. Every tool response must have a `content` array, where each item has a `type` and a payload. For text responses, `type` is `\"text\"` and `text` is the string to return. Claude receives this text and uses it to formulate its reply to the user.\n\nYou could also return `type: \"image\"` with base64-encoded image data, or other content types the protocol supports.",
+      "file": "index.js",
+      "line": 48
+    },
+    {
+      "title": "list_notes: tools can take no parameters",
+      "description": "Not all tools need parameters. Passing `{}` as the schema tells the SDK this tool takes no arguments — Claude just calls it with nothing and gets back a list.\n\nHere's what the handler does:\n1. `fs.readdirSync(NOTES_DIR)` — reads all filenames in the directory as an array of strings\n2. `.filter(f => f.endsWith(\".md\"))` — keeps only markdown files (ignores `.DS_Store`, etc.)\n3. For each file, `fs.statSync(filepath).mtime` gets the last-modified timestamp as a JavaScript `Date` object\n4. `.toLocaleString()` formats the date for display\n\nThe result is assembled into a markdown-style bullet list (`- filename  (last modified: ...)`) and returned as a single text block.\n\nIf the folder is empty, the tool returns the message `\"No notes found.\"` — a friendly response instead of an empty list that might confuse Claude.",
+      "file": "index.js",
+      "line": 69
+    },
+    {
+      "title": "read_note: looking up a file by title",
+      "description": "`read_note` accepts a `title` string and returns the contents of the matching note.\n\nThe key insight here is that the handler reconstructs the filepath *the same way `save_note` built it*: by running the title through `slugify` and appending `.md`. This means a user can ask Claude to read `\"Project Ideas\"` (the human title) rather than `\"project-ideas.md\"` (the slug), because the slugification is deterministic.\n\nBefore reading, `fs.existsSync(filepath)` checks whether the file actually exists:\n- If **not found**: the handler returns a friendly `\"Note not found: ...\"` message. This is important — if we skipped this check and the file didn't exist, `fs.readFileSync` would throw an unhandled exception, which would crash the tool call with a confusing error.\n- If **found**: `fs.readFileSync(filepath, \"utf8\")` reads the entire file as a string and returns it as the tool's text response.\n\nClaude then has the full note content and can summarize, quote, or act on it.",
+      "file": "index.js",
+      "line": 105
+    },
+    {
+      "title": "Stdio transport: how Claude Code actually talks to this server",
+      "description": "These last two lines are what make this a running MCP server rather than just a script that defines some functions:\n\n```js\nconst transport = new StdioServerTransport();\nawait server.connect(transport);\n```\n\n**What's happening physically:** When you add this server to Claude Code's config (in `~/.claude/claude_desktop_config.json`), Claude Code runs `node index.js` as a child process. It keeps that process alive and holds open two pipes:\n- **stdin** — Claude Code writes JSON messages *into* this process\n- **stdout** — this process writes JSON messages *back* to Claude Code\n\nThe messages are formatted as **JSON-RPC 2.0** — a simple standard for remote procedure calls using JSON. You never write or read this JSON directly; the SDK and transport layer handle all that framing and parsing.\n\n`server.connect(transport)` starts the event loop. The process now sits and waits for incoming JSON-RPC messages. When one arrives, the SDK parses it, finds the matching tool handler, calls it, and sends the result back — all automatically.\n\nYou never see this traffic directly. From your perspective, you registered a function, and Claude calls it.",
+      "file": "index.js",
+      "line": 144
+    }
+  ]
+}

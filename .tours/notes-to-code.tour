@@ -1,0 +1,96 @@
+{
+  "title": "From Spec to Code",
+  "description": "Traces each line of notes.md to the place in the codebase that satisfies it.",
+  "steps": [
+    {
+      "title": "The spec: what we set out to build",
+      "description": "This is the original requirement document. Every decision in `index.js` and `package.json` flows from these 22 lines. The tour steps below visit each requirement in turn and then jump to exactly where it's satisfied in the code.",
+      "file": "dev-notes-server/notes.md",
+      "line": 1
+    },
+    {
+      "title": "Requirement: three tools",
+      "description": "The spec says the server must expose three tools. In MCP, a \"tool\" is a function Claude can call by name. Each call to `server.tool(...)` registers one. You can see all three registrations in `index.js` — we'll visit each one in the next steps.",
+      "file": "dev-notes-server/notes.md",
+      "line": 3
+    },
+    {
+      "title": "Spec: tool 1 — save a note (listed as \"get_weather\")",
+      "description": "The spec names this tool `get_weather` but describes note-saving behavior — that's a copy-paste artifact in the notes. The implementation uses the name `save_note` so it matches what the tool actually does.\n\nThe requirements are:\n- Accept `title` and `content` as strings\n- Slugify the title → use as filename\n- Write a `.md` file to `~/dev-notes/`\n- Create the directory if it doesn't exist",
+      "file": "dev-notes-server/notes.md",
+      "line": 5
+    },
+    {
+      "title": "Implementation: save_note tool registration",
+      "description": "`server.tool(\"save_note\", ...)` is where the spec's first tool comes to life. The four arguments map directly to the requirements:\n\n- `\"save_note\"` — the name Claude uses to call it\n- The description string — what Claude reads to decide when to use it\n- The zod schema `{ title, content }` — enforces the two string parameters the spec listed\n- The async handler — the function body that actually writes the file",
+      "file": "dev-notes-server/index.js",
+      "line": 40
+    },
+    {
+      "title": "Implementation: slugify() satisfies the filename requirement",
+      "description": "The spec says: *\"slugified, e.g. 'Project Ideas' → 'project-ideas.md'\"*\n\n`slugify()` is the function that does exactly that. It lowercases the title, replaces spaces and punctuation with dashes, and strips any leading/trailing dashes. The `+ \".md\"` on line 51 adds the extension.\n\nThis function is defined once and reused by all three tools.",
+      "file": "dev-notes-server/index.js",
+      "line": 17
+    },
+    {
+      "title": "Implementation: ensureNotesDir() satisfies \"create if it doesn't exist\"",
+      "description": "The spec says: *\"Creates the ~/dev-notes/ directory if it doesn't exist.\"*\n\n`ensureNotesDir()` calls `fs.mkdirSync` with `{ recursive: true }`, which creates the directory (and any missing parents) without throwing if it already exists. It's called at the top of every tool handler so the directory is always ready before any file operation.",
+      "file": "dev-notes-server/index.js",
+      "line": 26
+    },
+    {
+      "title": "Implementation: writeFileSync — the actual disk write",
+      "description": "This single line satisfies the core of the first tool: write the content string to the computed filepath as UTF-8 text. `writeFileSync` is synchronous — the function won't return until the file is flushed to disk, which is fine for a local dev tool.",
+      "file": "dev-notes-server/index.js",
+      "line": 54
+    },
+    {
+      "title": "Spec: tool 2 — list_notes",
+      "description": "Requirements:\n- Takes **no parameters**\n- Returns all `.md` files in `~/dev-notes/`\n- Include their titles and last-modified dates",
+      "file": "dev-notes-server/notes.md",
+      "line": 10
+    },
+    {
+      "title": "Implementation: list_notes",
+      "description": "`{}` as the schema means no parameters — Claude calls this tool with nothing.\n\n`fs.readdirSync` lists all files, `.filter(f => f.endsWith(\".md\"))` keeps only markdown files, and `fs.statSync(...).mtime` gives the last-modified timestamp. The result is assembled into a bulleted markdown list and returned as a text block.",
+      "file": "dev-notes-server/index.js",
+      "line": 69
+    },
+    {
+      "title": "Spec: tool 3 — read_note",
+      "description": "Requirements:\n- Takes a `title` string\n- Finds the matching `.md` file (by slugifying the title)\n- Returns the file's contents",
+      "file": "dev-notes-server/notes.md",
+      "line": 13
+    },
+    {
+      "title": "Implementation: read_note",
+      "description": "`read_note` accepts a title, slugifies it the same way `save_note` did, and reconstructs the filepath. This means callers can pass `\"Project Ideas\"` rather than `\"project-ideas.md\"`.\n\nIf the file doesn't exist, it returns a friendly message instead of throwing. If it does exist, `readFileSync` returns the raw content as a string.",
+      "file": "dev-notes-server/index.js",
+      "line": 105
+    },
+    {
+      "title": "Spec: package.json with the SDK dependency",
+      "description": "The spec asks for `package.json` with `@modelcontextprotocol/sdk` as a dependency.",
+      "file": "dev-notes-server/notes.md",
+      "line": 18
+    },
+    {
+      "title": "Implementation: package.json",
+      "description": "`@modelcontextprotocol/sdk` is listed under `dependencies`, so `npm install` fetches it. `\"type\": \"module\"` is also required — the SDK uses ES module syntax (`import`/`export`), and Node needs this flag to process `.js` files as modules instead of CommonJS.",
+      "file": "dev-notes-server/package.json",
+      "line": 13
+    },
+    {
+      "title": "Spec: McpServer and StdioServerTransport",
+      "description": "The spec specifically asks for `McpServer` and `StdioServerTransport` from the SDK.",
+      "file": "dev-notes-server/notes.md",
+      "line": 19
+    },
+    {
+      "title": "Implementation: connecting via stdio",
+      "description": "`StdioServerTransport` handles the stdin/stdout pipe that Claude Code uses to communicate with this process. `server.connect(transport)` starts the event loop — from this point the server is live and waiting for tool calls. These two lines are what make the script run as an MCP server rather than just a regular Node program.",
+      "file": "dev-notes-server/index.js",
+      "line": 144
+    }
+  ]
+}
